@@ -1,2 +1,4 @@
 *~
 webapp/sql_init/initial.sql
+webapp/public/upload
+initial-data/images

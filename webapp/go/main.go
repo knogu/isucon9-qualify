@@ -10,10 +10,13 @@ import (
 	"log"
 	"net/http"
 	"os"
-//	"os/exec"
+
+	//	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
+
+	_ "net/http/pprof"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
@@ -21,7 +24,6 @@ import (
 	goji "goji.io"
 	"goji.io/pat"
 	"golang.org/x/crypto/bcrypt"
-	_ "net/http/pprof"
 )
 
 const (
@@ -102,16 +104,18 @@ type Item struct {
 }
 
 type ItemSimple struct {
-	ID         int64       `json:"id"`
-	SellerID   int64       `json:"seller_id"`
-	Seller     *UserSimple `json:"seller"`
-	Status     string      `json:"status"`
-	Name       string      `json:"name"`
-	Price      int         `json:"price"`
-	ImageURL   string      `json:"image_url"`
-	CategoryID int         `json:"category_id"`
-	Category   *Category   `json:"category"`
-	CreatedAt  int64       `json:"created_at"`
+	ID            int64       `json:"id" db:"id"`
+	SellerID      int64       `json:"seller_id" db:"seller_id"`
+	Seller        *UserSimple `json:"seller" db:"-"`
+	Status        string      `json:"status" db:"status"`
+	Name          string      `json:"name" db:"name"`
+	Price         int         `json:"price" db:"price"`
+	ImageName     string      `json:"-" db:"image_name"`
+	ImageURL      string      `json:"image_url" db:"-"`
+	CategoryID    int         `json:"category_id" db:"category_id"`
+	Category      *Category   `json:"category" db:"category"`
+	CreatedAt     int64       `json:"created_at" db:"-"`
+	CreatedAtTime time.Time   `json:"-" db:"created_at"`
 }
 
 type ItemDetail struct {
@@ -168,7 +172,7 @@ type Category struct {
 	ID                 int    `json:"id" db:"id"`
 	ParentID           int    `json:"parent_id" db:"parent_id"`
 	CategoryName       string `json:"category_name" db:"category_name"`
-	ParentCategoryName string `json:"parent_category_name,omitempty" db:"-"`
+	ParentCategoryName string `json:"parent_category_name,omitempty" db:"parent_category_name"`
 }
 
 type reqInitialize struct {
@@ -281,10 +285,10 @@ func init() {
 
 func main() {
 	//runtime.SetBlockProfileRate(1)
-        //runtime.SetMutexProfileFraction(1)
-        go func() {
-            log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
-        }()
+	//runtime.SetMutexProfileFraction(1)
+	go func() {
+		log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
+	}()
 
 	host := os.Getenv("MYSQL_HOST")
 	if host == "" {
@@ -771,11 +775,32 @@ func getUserItems(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	items := []Item{}
+	itemSimples := []ItemSimple{}
 	if itemID > 0 && createdAt > 0 {
 		// paging
-		err := dbx.Select(&items,
-			"SELECT * FROM `items` WHERE `seller_id` = ? AND `status` IN (?,?,?) AND (`created_at` < ?  OR (`created_at` <= ? AND `id` < ?)) ORDER BY `created_at` DESC, `id` DESC LIMIT ?",
+		err := dbx.Select(&itemSimples,
+			`
+			SELECT 
+				i.id AS id, 
+				i.seller_id AS seller_id,
+				i.status AS status,
+				i.name AS name,
+				i.price AS price,
+				i.image_name AS image_name,
+				i.created_at AS created_at,
+				c.id AS category_id,
+				c.id AS "category.id",
+				p.id AS "category.parent_id",
+				c.category_name AS "category.category_name",
+				p.category_name AS "category.parent_category_name"
+			FROM items AS i 
+				JOIN categories AS c ON i.category_id = c.id
+				JOIN categories AS p ON c.parent_id = p.id
+			WHERE seller_id = ? 
+				AND status IN (?,?,?) 
+				AND (created_at < ?  OR (created_at <= ? AND i.id < ?)) 
+				ORDER BY created_at DESC, id DESC LIMIT ?
+			`,
 			userSimple.ID,
 			ItemStatusOnSale,
 			ItemStatusTrading,
@@ -792,8 +817,28 @@ func getUserItems(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// 1st page
-		err := dbx.Select(&items,
-			"SELECT * FROM `items` WHERE `seller_id` = ? AND `status` IN (?,?,?) ORDER BY `created_at` DESC, `id` DESC LIMIT ?",
+		err := dbx.Select(&itemSimples,
+			`
+			SELECT 
+				i.id AS id, 
+				i.seller_id AS seller_id,
+				i.status AS status,
+				i.name AS name,
+				i.price AS price,
+				i.image_name AS image_name,
+				i.created_at AS created_at,
+				c.id AS category_id,
+				c.id AS "category.id",
+				p.id AS "category.parent_id",
+				c.category_name AS "category.category_name",
+				p.category_name AS "category.parent_category_name"
+			FROM items AS i 
+				JOIN categories AS c ON i.category_id = c.id
+				JOIN categories AS p ON c.parent_id = p.id
+			WHERE seller_id = ? 
+				AND status IN (?,?,?) 
+				ORDER BY created_at DESC, id DESC LIMIT ?
+			`,
 			userSimple.ID,
 			ItemStatusOnSale,
 			ItemStatusTrading,
@@ -807,25 +852,10 @@ func getUserItems(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	itemSimples := []ItemSimple{}
-	for _, item := range items {
-		category, err := getCategoryByID(dbx, item.CategoryID)
-		if err != nil {
-			outputErrorMsg(w, http.StatusNotFound, "category not found")
-			return
-		}
-		itemSimples = append(itemSimples, ItemSimple{
-			ID:         item.ID,
-			SellerID:   item.SellerID,
-			Seller:     &userSimple,
-			Status:     item.Status,
-			Name:       item.Name,
-			Price:      item.Price,
-			ImageURL:   getImageURL(item.ImageName),
-			CategoryID: item.CategoryID,
-			Category:   &category,
-			CreatedAt:  item.CreatedAt.Unix(),
-		})
+	for i := range itemSimples {
+		itemSimples[i].Seller = &userSimple
+		itemSimples[i].ImageURL = getImageURL(itemSimples[i].ImageName)
+		itemSimples[i].CreatedAt = itemSimples[i].CreatedAtTime.Unix()
 	}
 
 	hasNext := false

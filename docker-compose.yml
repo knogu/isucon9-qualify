@@ -10,7 +10,8 @@ services:
                         - '80:8000'
                         - '6060:6060'
                         - '1080:1080'
-                command: sh -c "apt update && apt install -y graphviz && cd /home/isucon9/webapp/go && GO111MODULE=on go run api.go main.go"
+                working_dir: /home/isucon9
+                command: sh -c "cd /home/isucon9/webapp/go && GO111MODULE=on go run api.go main.go"
         db:
                 container_name: db
                 image: mysql:8.0
