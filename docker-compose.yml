@@ -11,14 +11,14 @@ services:
                         - '6060:6060'
                         - '1080:1080'
                 command: sh -c "apt update && apt install -y graphviz && cd /home/isucon9/webapp/go && GO111MODULE=on go run api.go main.go"
+                depends_on:
+                        - db
         db:
                 container_name: db
                 image: mysql:8.0
                 volumes:
                         - dbvol:/var/lib/mysql
                         - ./webapp/sql_init:/docker-entrypoint-initdb.d
-                        - ./mysql-conf:/etc/mysql/conf.d
-                        - ./mysql-log:/var/log/mysql
                 environment:
                         MYSQL_ROOT_PASSWORD: root
                         MYSQL_USER: isucari
